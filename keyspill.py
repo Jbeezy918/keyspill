@@ -512,6 +512,8 @@ def cmd_deps(a) -> int:
 
     deps = collect_deps(root)
     if not deps:
+        if a.quiet:
+            return 0
         print("Nothing pinned to check. keyspill deps reads exact versions only — a "
               "lockfile (package-lock.json, yarn.lock, poetry.lock, Pipfile.lock, "
               "Cargo.lock, go.sum, Gemfile.lock, composer.lock), a requirements.txt "
@@ -522,7 +524,10 @@ def cmd_deps(a) -> int:
     for (e, _, _) in deps:
         ecos[e] = ecos.get(e, 0) + 1
     summary = ", ".join(f"{n} {e}" for e, n in sorted(ecos.items(), key=lambda kv: -kv[1]))
-    if not a.json:
+    # --quiet means exit status only. It was printing the package count and the network
+    # notice regardless, which breaks its one use: `keyspill deps . --quiet && echo ok`
+    # in a CI gate or a pre-commit hook.
+    if not a.json and not a.quiet:
         print(f"{len(deps)} pinned packages ({summary}).")
         print("Sending package names and versions to api.osv.dev — nothing else.\n")
 
