@@ -6,6 +6,9 @@ was captured as a "secret" by a real clipboard watcher during a single `pip inst
 
     python3 -m pytest test_keyspill.py -q      (or just: python3 test_keyspill.py)
 """
+import json
+import sys
+
 import keyspill
 
 NOISE = [
@@ -139,3 +142,86 @@ if __name__ == "__main__":
                 fails += 1; print(f"  FAIL  {name}: {e}")
     print(f"\n{'all passed' if not fails else f'{fails} failed'}")
     raise SystemExit(1 if fails else 0)
+
+
+# ── dependency scanning ──────────────────────────────────────────────────────
+# All offline. The parsers are the part that can silently go wrong; the OSV call is a
+# single well-documented POST and mocking it would only test the mock. A test suite that
+# needs the network is a test suite that gets skipped.
+
+def test_requirements_takes_only_exact_pins():
+    got = keyspill.parse_requirements(
+        "flask==0.12.2\n"
+        "requests>=2.0\n"          # a range: cannot be checked without resolving it
+        "urllib3 == 1.24.1\n"
+        "# django==1.0\n"          # comment
+        "black\n")                 # unpinned
+    assert got == [("PyPI", "flask", "0.12.2"), ("PyPI", "urllib3", "1.24.1")]
+
+
+def test_requirements_normalises_underscores():
+    # PyPI treats typing_extensions and typing-extensions as the same project; OSV keys
+    # on the hyphenated form, so an underscore name would silently match nothing.
+    assert keyspill.parse_requirements("typing_extensions==4.16.0") == [
+        ("PyPI", "typing-extensions", "4.16.0")]
+
+
+def test_yarn_lock_splits_scoped_names_at_the_last_at():
+    got = keyspill.parse_yarn_lock(
+        '"@babel/core@^7.0.0":\n  version "7.24.0"\n\n'
+        'lodash@^4.17.0:\n  version "4.17.21"\n')
+    assert got == [("npm", "@babel/core", "7.24.0"), ("npm", "lodash", "4.17.21")]
+
+
+def test_package_lock_v3_and_v1():
+    v3 = json.dumps({"lockfileVersion": 3, "packages": {
+        "": {"name": "root"},
+        "node_modules/gh-pages": {"version": "3.2.3"}}})
+    assert ("npm", "gh-pages", "3.2.3") in keyspill.parse_package_lock(v3)
+    v1 = json.dumps({"lockfileVersion": 1, "dependencies": {
+        "minimist": {"version": "1.2.0", "dependencies": {
+            "nested": {"version": "0.1.0"}}}}})
+    got = keyspill.parse_package_lock(v1)
+    assert ("npm", "minimist", "1.2.0") in got and ("npm", "nested", "0.1.0") in got
+
+
+def test_go_sum_ignores_the_go_mod_hash_line():
+    # Every module is listed twice; counting both double-reports the whole dependency set.
+    got = keyspill.parse_go_sum(
+        "github.com/x/y v1.2.3 h1:abc=\n"
+        "github.com/x/y v1.2.3/go.mod h1:def=\n")
+    assert got == [("Go", "github.com/x/y", "1.2.3")]
+
+
+def test_installed_packages_are_read_from_dist_info(tmp_path):
+    sp = tmp_path / "lib" / "python3.13" / "site-packages"
+    (sp / "pillow-10.4.0.dist-info").mkdir(parents=True)
+    (sp / "typing_extensions-4.16.0.dist-info").mkdir()
+    (sp / "not_a_package").mkdir()
+    got = set(keyspill.parse_site_packages(tmp_path))
+    assert got == {("PyPI", "pillow", "10.4.0"),
+                   ("PyPI", "typing-extensions", "4.16.0")}
+
+
+def test_installed_fallback_only_when_no_lockfile(tmp_path):
+    # A project that pins its dependencies should be judged on what it declares, not on
+    # whatever happens to be sitting in a virtualenv beside it.
+    (tmp_path / "requirements.txt").write_text("flask==0.12.2\n")
+    sp = tmp_path / ".venv" / "lib" / "site-packages"
+    (sp / "pillow-10.4.0.dist-info").mkdir(parents=True)
+    found = keyspill.collect_deps(tmp_path)
+    assert ("PyPI", "flask", "0.12.2") in found
+    assert ("PyPI", "pillow", "10.4.0") not in found
+
+
+def test_default_scan_opens_no_socket(tmp_path, monkeypatch):
+    """The promise on the tin: `keyspill <path>` must not touch the network."""
+    import socket
+    (tmp_path / "a.txt").write_text("nothing interesting here\n")
+
+    def boom(*a, **k):
+        raise AssertionError("keyspill opened a socket during a plain scan")
+
+    monkeypatch.setattr(socket.socket, "connect", boom)
+    monkeypatch.setattr(sys, "argv", ["keyspill", str(tmp_path), "--quiet"])
+    keyspill.main()

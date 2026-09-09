@@ -22,6 +22,41 @@ and increasingly in AI chat transcripts.
 
 That last one is new. Keys now leak into places that did not exist three years ago.
 
+## Dependency vulnerabilities
+
+```
+python3 keyspill.py deps ~/myproject
+python3 keyspill.py deps ~/myproject --json
+python3 keyspill.py deps ~/myproject --quiet && echo "clean"
+```
+
+Reads what your project actually depends on and asks
+[OSV](https://osv.dev) — Google's open vulnerability database — which of
+those versions have known vulnerabilities. Free, no account, no API key.
+
+Findings are grouped **per package**, with the single version that clears every advisory
+against it:
+
+```
+  CRITICAL  gh-pages@3.2.3 (npm)  1 advisory  ->  upgrade to 5.0.0
+  HIGH      brace-expansion@1.1.14 (npm)  3 advisories  ->  upgrade to 5.0.8
+```
+
+Reads `package-lock.json`, `yarn.lock`, `poetry.lock`, `Pipfile.lock`, `Cargo.lock`,
+`go.sum`, `Gemfile.lock`, `composer.lock`, `requirements.txt` (only lines pinned with
+`==`) — and, when a project pins nothing, the exact versions installed in its
+virtualenv.
+
+**Only exact versions are checked.** A range like `requests>=2.0` says nothing about
+what you have installed, and guessing at it reports vulnerabilities you may not have.
+
+### This is the one command that uses the network
+
+`keyspill <path>` opens no socket — there is a test that enforces it. `keyspill deps`
+has to ask someone, so it is a separate subcommand you opt into, and it sends **package
+names and versions only**. Not your code, not your file paths, and nothing the secrets
+scan found.
+
 ## What makes it different
 
 **It is built around not crying wolf.** Matching `sk_live_` is easy. The reason secret
