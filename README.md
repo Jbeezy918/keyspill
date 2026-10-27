@@ -5,6 +5,7 @@ Find API keys and tokens sitting in plain text on your machine.
 **Read-only. No network. No daemon. No config. One file, no dependencies.**
 
 ```bash
+curl -O https://raw.githubusercontent.com/Jbeezy918/keyspill/main/keyspill.py
 python3 keyspill.py ~/Projects
 ```
 
